@@ -1,0 +1,10 @@
+[package]
+name = "nestrs-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.7"
+linkme = "0.3.37"
+nestrs = { version = "1.6.0", features = ["queues"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
