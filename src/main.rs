@@ -2,7 +2,10 @@ mod app_controller;
 mod app_module;
 mod app_service;
 mod database;
+mod entities;
+mod fight_news;
 mod jobs_processor;
+mod migration;
 
 use nestrs::prelude::*;
 
@@ -10,6 +13,8 @@ use app_module::AppModule;
 
 #[tokio::main]
 async fn main() {
+    try_init_tracing(TracingConfig::default().default_directive("info,sqlx=warn")).expect("failed to set up logging");
+
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let host: std::net::IpAddr = std::env::var("HOST")
         .ok()

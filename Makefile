@@ -1,4 +1,4 @@
-.PHONY: up down logs build restart ps psql run clean
+.PHONY: up down logs build restart ps psql run test clean
 
 # Build images and start the app and Postgres in the background.
 up:
@@ -26,6 +26,9 @@ psql:
 run:
 	docker compose up -d db
 	DATABASE_URL=postgres://nestrs:nestrs@localhost:5432/nestrs cargo run
+
+test:
+	cargo test
 
 # Stop everything and delete the database volume.
 clean:
