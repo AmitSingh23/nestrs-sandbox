@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 axum = "0.7"
 linkme = "0.3.37"
-nestrs = { version = "1.6.0", features = ["queues"] }
+nestrs = { version = "1.6.0", features = ["queues", "sea-orm"] }
+sea-orm = { version = "1.1", default-features = false, features = ["sqlx-postgres", "runtime-tokio-rustls", "macros"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

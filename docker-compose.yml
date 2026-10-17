@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nestrs
+      POSTGRES_PASSWORD: nestrs
+      POSTGRES_DB: nestrs
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nestrs -d nestrs"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://nestrs:nestrs@db:5432/nestrs
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
