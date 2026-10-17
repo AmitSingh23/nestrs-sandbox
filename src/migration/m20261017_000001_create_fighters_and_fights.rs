@@ -17,7 +17,12 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Fighters::Name).string().not_null().unique_key())
+                    .col(
+                        ColumnDef::new(Fighters::Name)
+                            .string()
+                            .not_null()
+                            .unique_key(),
+                    )
                     .col(
                         ColumnDef::new(Fighters::CreatedAt)
                             .timestamp_with_time_zone()

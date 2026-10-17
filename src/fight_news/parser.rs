@@ -26,8 +26,9 @@ const MAX_NAME_WORDS: usize = 3;
 pub struct NewsItem {
     pub title: String,
     pub summary: Option<String>,
-    pub url: String,
     pub published: Option<DateTime<Utc>>,
+    /// From the UFC itself: always about the UFC, and always confirmed.
+    pub official: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +38,9 @@ pub struct Matchup {
     pub status: FightStatus,
     pub event_name: Option<String>,
     pub event_date: Option<NaiveDate>,
+    /// Listed on a published fight card, so its event and date are
+    /// authoritative.
+    pub from_fight_card: bool,
 }
 
 static VS: LazyLock<Regex> =
@@ -92,9 +96,36 @@ static NUMERIC_ENTITY: LazyLock<Regex> =
 /// Words that can follow "UFC" without being part of an event name
 /// ("UFC Edmonton Weigh-In Video", "UFC Champ Volkanovski").
 const NOT_EVENT_WORDS: &[&str] = &[
-    "Bonuses", "Boss", "Card", "Ceo", "Champ", "Champion", "Fighter", "Hall", "Legend",
-    "Live", "Main", "Odds", "Predictions", "Preview", "President", "Results", "Star", "Veteran",
-    "Video", "Weigh",
+    "Bonuses",
+    "Boss",
+    "Card",
+    "Ceo",
+    "Champ",
+    "Champion",
+    "Fighter",
+    "Hall",
+    "Legend",
+    "Live",
+    "Main",
+    "Odds",
+    "Predictions",
+    "Preview",
+    "President",
+    "Results",
+    "Star",
+    "Veteran",
+    "Video",
+    "Weigh",
+    "Heavyweight",
+    "Light",
+    "Middleweight",
+    "Welterweight",
+    "Lightweight",
+    "Featherweight",
+    "Bantamweight",
+    "Flyweight",
+    "Strawweight",
+    "Women",
 ];
 
 /// Lowercase connecting words that belong inside a name ("Rafael dos Anjos").
@@ -105,25 +136,124 @@ const NAME_PARTICLES: &[&str] = &[
 /// Capitalized headline words that are never part of a fighter's name. Matters
 /// for title-cased headlines ("Dana White Confirms Jones Vs. Aspinall").
 const NOT_NAME_WORDS: &[&str] = &[
-    "a", "after", "against", "and", "announces", "at", "bantamweight", "before", "belt", "between",
-    "bmf", "booked", "bout", "breaking", "callout", "championship", "co-main", "confirmed",
-    "confirms", "could", "eyes", "exclusive", "featherweight", "fight", "flyweight", "for",
-    "heavyweight", "how", "in", "interim", "is", "lightweight", "main", "middleweight", "new",
-    "next", "odds", "official", "officially", "on", "picks", "predictions", "preview", "rematch",
-    "report", "reportedly", "says", "set", "sources", "strawweight", "targeted", "targets", "the",
-    "title", "ufc", "wants", "watch", "welterweight", "what", "who", "why", "will", "with",
-    "women's", "results", "result", "video", "live", "full", "card", "highlights", "staredown",
-    "weigh-in", "weigh-ins", "weigh", "ins", "press", "conference", "face-off", "trilogy",
+    "a",
+    "after",
+    "against",
+    "and",
+    "announces",
+    "at",
+    "bantamweight",
+    "before",
+    "belt",
+    "between",
+    "bmf",
+    "booked",
+    "bout",
+    "breaking",
+    "callout",
+    "championship",
+    "co-main",
+    "confirmed",
+    "confirms",
+    "could",
+    "eyes",
+    "exclusive",
+    "featherweight",
+    "fight",
+    "flyweight",
+    "for",
+    "heavyweight",
+    "how",
+    "in",
+    "interim",
+    "is",
+    "lightweight",
+    "main",
+    "middleweight",
+    "new",
+    "next",
+    "odds",
+    "official",
+    "officially",
+    "on",
+    "picks",
+    "predictions",
+    "preview",
+    "rematch",
+    "report",
+    "reportedly",
+    "says",
+    "set",
+    "sources",
+    "strawweight",
+    "targeted",
+    "targets",
+    "the",
+    "title",
+    "ufc",
+    "wants",
+    "watch",
+    "welterweight",
+    "what",
+    "who",
+    "why",
+    "will",
+    "with",
+    "women's",
+    "results",
+    "result",
+    "video",
+    "live",
+    "full",
+    "card",
+    "highlights",
+    "staredown",
+    "weigh-in",
+    "weigh-ins",
+    "weigh",
+    "ins",
+    "press",
+    "conference",
+    "face-off",
+    "trilogy",
     // Headline verbs, capitalized in title-case headlines.
-    "addresses", "blasts", "believes", "breaks", "calls", "claims", "defends", "discusses",
-    "explains", "fires", "hits", "mocks", "offers", "praises", "predicts", "proposes",
-    "questions", "responds", "reveals", "rips", "sends", "shares", "slams", "thinks",
+    "addresses",
+    "blasts",
+    "believes",
+    "breaks",
+    "calls",
+    "claims",
+    "defends",
+    "discusses",
+    "explains",
+    "fires",
+    "hits",
+    "mocks",
+    "offers",
+    "praises",
+    "predicts",
+    "proposes",
+    "questions",
+    "responds",
+    "reveals",
+    "rips",
+    "sends",
+    "shares",
+    "slams",
+    "thinks",
 ];
 
 /// People who show up in "A vs. B" headlines without being fighters.
 const NOT_FIGHTERS: &[&str] = &[
-    "Dana White", "Hunter Campbell", "Eddie Hearn", "Ari Emanuel", "Mark Shapiro",
-    "Turki Alalshikh", "Scott Coker", "Chatri Sityodtong", "Donn Davis",
+    "Dana White",
+    "Hunter Campbell",
+    "Eddie Hearn",
+    "Ari Emanuel",
+    "Mark Shapiro",
+    "Turki Alalshikh",
+    "Scott Coker",
+    "Chatri Sityodtong",
+    "Donn Davis",
 ];
 
 /// Matchups announced in `item` that haven't happened as of `today`.
@@ -136,11 +266,15 @@ pub fn extract_matchups(item: &NewsItem, today: NaiveDate) -> Vec<Matchup> {
     };
 
     let is_result = RESULT_WORDS.is_match(&title) && !WEIGH_IN.is_match(&title);
-    if !UFC.is_match(&full_text) || is_result {
+    if !(item.official || UFC.is_match(&full_text)) || is_result {
         return Vec::new();
     }
 
-    let status = classify(&title);
+    let status = if item.official {
+        FightStatus::Confirmed
+    } else {
+        classify(&title)
+    };
     let event_name = find_event(&title).or_else(|| summary.as_deref().and_then(find_event));
     let anchor = item.published.map(|p| p.date_naive()).unwrap_or(today);
     let event_date =
@@ -160,8 +294,14 @@ pub fn extract_matchups(item: &NewsItem, today: NaiveDate) -> Vec<Matchup> {
             status,
             event_name: event_name.clone(),
             event_date,
+            from_fight_card: false,
         })
         .collect()
+}
+
+/// Whether `text` contains an "A vs. B" pattern worth parsing.
+pub fn mentions_matchup(text: &str) -> bool {
+    VS.is_match(text)
 }
 
 /// Rumor wording wins over confirmation wording ("Report: X vs. Y set for
@@ -182,7 +322,9 @@ fn find_pairs(title: &str) -> Vec<(String, String)> {
     let separators: Vec<_> = VS.find_iter(title).collect();
     for (i, sep) in separators.iter().enumerate() {
         let left_start = if i == 0 { 0 } else { separators[i - 1].end() };
-        let right_end = separators.get(i + 1).map_or(title.len(), |next| next.start());
+        let right_end = separators
+            .get(i + 1)
+            .map_or(title.len(), |next| next.start());
         let left = name_before(&title[left_start..sep.start()]);
         let right = name_after(&title[sep.end()..right_end]);
         if let (Some(a), Some(b)) = (left, right) {
@@ -251,7 +393,11 @@ fn accept_word(word: &str, taken: usize) -> bool {
     let first_upper = chars.next().is_some_and(|c| c.is_uppercase());
     // All-caps words are acronyms (UFC, PFL, BMF), not names.
     let is_acronym = word.len() > 1 && word.chars().all(|c| !c.is_lowercase());
-    first_upper && !is_acronym && word.chars().all(|c| c.is_alphabetic() || "'’.-".contains(c))
+    first_upper
+        && !is_acronym
+        && word
+            .chars()
+            .all(|c| c.is_alphabetic() || "'’.-".contains(c))
 }
 
 fn is_non_fighter(name: &str) -> bool {
@@ -285,7 +431,10 @@ fn real_words(words: &[&str]) -> usize {
 fn clean_word(raw: &str) -> &str {
     let word = raw.trim_matches(|c: char| ",;:!?\"“”()[]".contains(c));
     // Possessives: "Jones' next fight", "Pereira's".
-    let word = word.strip_suffix("'s").or_else(|| word.strip_suffix("’s")).unwrap_or(word);
+    let word = word
+        .strip_suffix("'s")
+        .or_else(|| word.strip_suffix("’s"))
+        .unwrap_or(word);
     word.trim_end_matches(['\'', '’', '.'])
 }
 
@@ -330,9 +479,14 @@ fn find_event(text: &str) -> Option<String> {
 }
 
 fn month_number(name: &str) -> Option<u32> {
-    let months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    let months = [
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+    ];
     let prefix = name.get(..3)?.to_lowercase();
-    months.iter().position(|m| *m == prefix).map(|i| i as u32 + 1)
+    months
+        .iter()
+        .position(|m| *m == prefix)
+        .map(|i| i as u32 + 1)
 }
 
 fn strip_html(html: &str) -> String {
@@ -347,7 +501,9 @@ pub fn normalize(text: &str) -> String {
             (_, Some(hex)) => u32::from_str_radix(hex.as_str(), 16).ok(),
             _ => None,
         };
-        code.and_then(char::from_u32).map(String::from).unwrap_or_default()
+        code.and_then(char::from_u32)
+            .map(String::from)
+            .unwrap_or_default()
     });
     decoded
         .replace("&amp;", "&")
@@ -373,7 +529,7 @@ mod tests {
         NewsItem {
             title: title.into(),
             summary: summary.map(Into::into),
-            url: "https://example.com/a".into(),
+            official: false,
             published: Some(
                 NaiveDate::from_ymd_opt(2026, 10, 16)
                     .unwrap()
@@ -392,7 +548,10 @@ mod tests {
 
     #[test]
     fn official_booking_with_event_and_date() {
-        let m = one("Jon Jones vs. Tom Aspinall official for UFC 330 on Dec. 12", None);
+        let m = one(
+            "Jon Jones vs. Tom Aspinall official for UFC 330 on Dec. 12",
+            None,
+        );
         assert_eq!(m.fighter_a, "Jon Jones");
         assert_eq!(m.fighter_b, "Tom Aspinall");
         assert_eq!(m.status, FightStatus::Confirmed);
@@ -402,7 +561,10 @@ mod tests {
 
     #[test]
     fn report_is_rumored_even_when_it_says_set() {
-        let m = one("Report: Islam Makhachev vs. Ilia Topuria set for UFC 331", None);
+        let m = one(
+            "Report: Islam Makhachev vs. Ilia Topuria set for UFC 331",
+            None,
+        );
         assert_eq!(m.fighter_a, "Islam Makhachev");
         assert_eq!(m.fighter_b, "Ilia Topuria");
         assert_eq!(m.status, FightStatus::Rumored);
@@ -410,7 +572,10 @@ mod tests {
 
     #[test]
     fn in_the_works_is_rumored() {
-        let m = one("Sean O'Malley vs. Merab Dvalishvili trilogy in the works for UFC", None);
+        let m = one(
+            "Sean O'Malley vs. Merab Dvalishvili trilogy in the works for UFC",
+            None,
+        );
         assert_eq!(m.fighter_a, "Sean O'Malley");
         assert_eq!(m.fighter_b, "Merab Dvalishvili");
         assert_eq!(m.status, FightStatus::Rumored);
@@ -435,7 +600,10 @@ mod tests {
 
     #[test]
     fn name_particles_are_kept() {
-        let m = one("Rafael dos Anjos vs. Paddy Pimblett added to UFC London", None);
+        let m = one(
+            "Rafael dos Anjos vs. Paddy Pimblett added to UFC London",
+            None,
+        );
         assert_eq!(m.fighter_a, "Rafael dos Anjos");
         assert_eq!(m.fighter_b, "Paddy Pimblett");
     }
@@ -443,10 +611,16 @@ mod tests {
     #[test]
     fn several_matchups_in_one_headline() {
         let found = extract_matchups(
-            &item("UFC Fight Night adds Burns vs. Brady, Lopes vs. Evloev", None),
+            &item(
+                "UFC Fight Night adds Burns vs. Brady, Lopes vs. Evloev",
+                None,
+            ),
             today(),
         );
-        let names: Vec<_> = found.iter().map(|m| (m.fighter_a.as_str(), m.fighter_b.as_str())).collect();
+        let names: Vec<_> = found
+            .iter()
+            .map(|m| (m.fighter_a.as_str(), m.fighter_b.as_str()))
+            .collect();
         assert_eq!(names, [("Burns", "Brady"), ("Lopes", "Evloev")]);
     }
 
@@ -462,18 +636,35 @@ mod tests {
 
     #[test]
     fn results_and_past_fights_are_skipped() {
-        assert!(extract_matchups(&item("UFC 329 results: Jones def. Aspinall", None), today()).is_empty());
-        assert!(extract_matchups(&item("Jones beats Aspinall vs. nobody at UFC 329", None), today()).is_empty());
-        assert!(extract_matchups(
-            &item("Jones vs. Aspinall set for UFC 329 on Oct. 4, 2026", None),
-            today()
-        )
-        .is_empty());
+        assert!(
+            extract_matchups(&item("UFC 329 results: Jones def. Aspinall", None), today())
+                .is_empty()
+        );
+        assert!(
+            extract_matchups(
+                &item("Jones beats Aspinall vs. nobody at UFC 329", None),
+                today()
+            )
+            .is_empty()
+        );
+        assert!(
+            extract_matchups(
+                &item("Jones vs. Aspinall set for UFC 329 on Oct. 4, 2026", None),
+                today()
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn non_ufc_fights_are_skipped() {
-        assert!(extract_matchups(&item("Canelo vs. Crawford set for September", None), today()).is_empty());
+        assert!(
+            extract_matchups(
+                &item("Canelo vs. Crawford set for September", None),
+                today()
+            )
+            .is_empty()
+        );
     }
 
     // Headlines below are from the outlets' live feeds on 2026-10-17.
@@ -484,40 +675,76 @@ mod tests {
             "UFC Edmonton weigh-in results: Joaquin Buckley vs. Mike Malott is set, entire card perfect on the scale",
             None,
         );
-        assert_eq!((m.fighter_a.as_str(), m.fighter_b.as_str()), ("Joaquin Buckley", "Mike Malott"));
+        assert_eq!(
+            (m.fighter_a.as_str(), m.fighter_b.as_str()),
+            ("Joaquin Buckley", "Mike Malott")
+        );
         assert_eq!(m.status, FightStatus::Confirmed);
         assert_eq!(m.event_name.as_deref(), Some("UFC Edmonton"));
 
-        let m = one("LIVE! Watch UFC Edmonton ceremonial weigh ins video stream &#124; Buckley vs. Malott", None);
+        let m = one(
+            "LIVE! Watch UFC Edmonton ceremonial weigh ins video stream &#124; Buckley vs. Malott",
+            None,
+        );
         assert_eq!(m.status, FightStatus::Confirmed);
         assert_eq!(m.event_name.as_deref(), Some("UFC Edmonton"));
 
         let m = one("UFC Edmonton: Buckley vs. Malott Weigh-In Results", None);
-        assert_eq!((m.fighter_a.as_str(), m.fighter_b.as_str()), ("Buckley", "Malott"));
+        assert_eq!(
+            (m.fighter_a.as_str(), m.fighter_b.as_str()),
+            ("Buckley", "Malott")
+        );
         assert_eq!(m.event_name.as_deref(), Some("UFC Edmonton"));
     }
 
     #[test]
     fn dana_white_counts_as_ufc() {
-        let m = one("Dana White leaves door open for Shavkat Rakhmonov vs. Michael Morales", None);
-        assert_eq!((m.fighter_a.as_str(), m.fighter_b.as_str()), ("Shavkat Rakhmonov", "Michael Morales"));
+        let m = one(
+            "Dana White leaves door open for Shavkat Rakhmonov vs. Michael Morales",
+            None,
+        );
+        assert_eq!(
+            (m.fighter_a.as_str(), m.fighter_b.as_str()),
+            ("Shavkat Rakhmonov", "Michael Morales")
+        );
         assert_eq!(m.status, FightStatus::Rumored);
     }
 
     #[test]
     fn lowercase_words_between_name_and_vs_are_skipped() {
-        let m = one("UFC champ Volkanovski proposes 'send-off' superbout vs. Gaethje", None);
-        assert_eq!((m.fighter_a.as_str(), m.fighter_b.as_str()), ("Volkanovski", "Gaethje"));
+        let m = one(
+            "UFC champ Volkanovski proposes 'send-off' superbout vs. Gaethje",
+            None,
+        );
+        assert_eq!(
+            (m.fighter_a.as_str(), m.fighter_b.as_str()),
+            ("Volkanovski", "Gaethje")
+        );
         assert_eq!(m.status, FightStatus::Rumored);
         assert_eq!(m.event_name, None);
 
-        let m = one("Chad Anheliger eyes ‘perfect redemption’ vs. Steven Koslow at UFC Edmonton after lengthy layoff", None);
-        assert_eq!((m.fighter_a.as_str(), m.fighter_b.as_str()), ("Chad Anheliger", "Steven Koslow"));
+        let m = one(
+            "Chad Anheliger eyes ‘perfect redemption’ vs. Steven Koslow at UFC Edmonton after lengthy layoff",
+            None,
+        );
+        assert_eq!(
+            (m.fighter_a.as_str(), m.fighter_b.as_str()),
+            ("Chad Anheliger", "Steven Koslow")
+        );
     }
 
     #[test]
     fn no_opponent_name_means_no_matchup() {
-        assert!(extract_matchups(&item("Israel Adesanya set to headline UFC Saudi Arabia vs. rising star", None), today()).is_empty());
+        assert!(
+            extract_matchups(
+                &item(
+                    "Israel Adesanya set to headline UFC Saudi Arabia vs. rising star",
+                    None
+                ),
+                today()
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -547,15 +774,31 @@ mod tests {
     }
 
     #[test]
+    fn official_items_are_confirmed_without_saying_ufc() {
+        let mut official = item("Pereira vs Ankalaev", None);
+        official.official = true;
+        let found = extract_matchups(&official, today());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].status, FightStatus::Confirmed);
+    }
+
+    #[test]
     fn html_entities_are_decoded() {
-        assert_eq!(normalize("Odds &#124; UFC&#x2019;s &amp; more"), "Odds | UFC’s & more");
+        assert_eq!(
+            normalize("Odds &#124; UFC&#x2019;s &amp; more"),
+            "Odds | UFC’s & more"
+        );
     }
 
     #[test]
     fn stale_undated_rumors_are_skipped() {
         let mut old = item("Jones vs. Aspinall in the works for UFC", None);
         old.published = Some(
-            NaiveDate::from_ymd_opt(2026, 6, 1).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc(),
+            NaiveDate::from_ymd_opt(2026, 6, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc(),
         );
         assert!(extract_matchups(&old, today()).is_empty());
     }

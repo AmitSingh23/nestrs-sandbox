@@ -16,6 +16,10 @@ impl AppController {
 
     #[get("/db")]
     async fn db_status(State(service): State<Arc<AppService>>) -> &'static str {
-        if service.db_ok().await { "ok" } else { "unavailable" }
+        if service.db_ok().await {
+            "ok"
+        } else {
+            "unavailable"
+        }
     }
 }
