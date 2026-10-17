@@ -7,7 +7,7 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter
 
 use crate::entities::fight::{self, FightStatus};
 use crate::entities::fighter;
-use crate::fight_news::parser::{extract_matchups, Matchup, NewsItem};
+use crate::fight_news::parser::{extract_matchups, normalize, Matchup, NewsItem};
 use crate::fight_news::sources::{Source, SOURCES};
 
 const USER_AGENT: &str = "nestrs-sandbox fight-news bot";
@@ -125,7 +125,7 @@ async fn save(
             event_date: Set(matchup.event_date),
             source_name: Set(source.name.to_string()),
             source_url: Set(item.url.clone()),
-            headline: Set(item.title.clone()),
+            headline: Set(normalize(&item.title)),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()
@@ -154,13 +154,51 @@ async fn save(
     }
     update.source_name = Set(source.name.to_string());
     update.source_url = Set(item.url.clone());
-    update.headline = Set(item.title.clone());
+    update.headline = Set(normalize(&item.title));
     update.updated_at = Set(now);
     update.update(db).await?;
     Ok(false)
 }
 
+/// Finds or creates the fighter. Headlines often use only a surname, so
+/// "Buckley" and "Joaquin Buckley" are treated as the same fighter when that's
+/// unambiguous, keeping the full name.
 async fn fighter_id(db: &DbConn, name: &str) -> Result<i32, sea_orm::DbErr> {
+    if let Some(found) = fighter::Entity::find()
+        .filter(fighter::Column::Name.eq(name))
+        .one(db)
+        .await?
+    {
+        return Ok(found.id);
+    }
+
+    match name.rsplit_once(' ') {
+        // Surname only: reuse the one full-named fighter with that surname.
+        None => {
+            let matches = fighter::Entity::find()
+                .filter(fighter::Column::Name.ends_with(format!(" {name}")))
+                .all(db)
+                .await?;
+            if let [only] = matches.as_slice() {
+                return Ok(only.id);
+            }
+        }
+        // Full name: upgrade a surname-only fighter saved earlier.
+        Some((_, surname)) => {
+            if let Some(short) = fighter::Entity::find()
+                .filter(fighter::Column::Name.eq(surname))
+                .one(db)
+                .await?
+            {
+                let id = short.id;
+                let mut update: fighter::ActiveModel = short.into();
+                update.name = Set(name.to_string());
+                update.update(db).await?;
+                return Ok(id);
+            }
+        }
+    }
+
     fighter::Entity::insert(fighter::ActiveModel {
         name: Set(name.to_string()),
         created_at: Set(Utc::now()),
