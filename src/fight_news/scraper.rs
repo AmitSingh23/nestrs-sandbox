@@ -5,7 +5,9 @@ use chrono::{NaiveDate, Utc};
 use nestrs::sea_orm::DbConn;
 use reqwest::Url;
 use sea_orm::sea_query::OnConflict;
-use sea_orm::{ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, Set,
+};
 
 use crate::entities::fight::{self, FightStatus};
 use crate::entities::fighter;
@@ -18,6 +20,10 @@ const USER_AGENT: &str = "Mozilla/5.0 (compatible; nestrs-sandbox-fight-news/0.1
 
 /// Pause between article requests to the same site.
 const ARTICLE_DELAY: Duration = Duration::from_millis(300);
+
+/// News published this soon after a pair's fight is still about that fight.
+/// Fight nights in the Americas end after midnight UTC, and recaps follow.
+const POST_FIGHT_COVERAGE: chrono::Duration = chrono::Duration::days(2);
 
 /// Upper bound on articles opened per source and run.
 const MAX_ARTICLES_PER_SOURCE: usize = 40;
@@ -32,6 +38,9 @@ pub struct ScrapeSummary {
     pub fights_seen: usize,
     pub fights_created: usize,
     pub fights_updated: usize,
+    pub fights_unchanged: usize,
+    /// News about a fight that has already happened.
+    pub fights_skipped: usize,
 }
 
 /// One fight reported by a source, with where it was reported.
@@ -39,6 +48,15 @@ struct Report {
     matchup: Matchup,
     url: String,
     headline: String,
+    /// When the article was published, if known.
+    published: Option<NaiveDate>,
+}
+
+enum Saved {
+    Created,
+    Updated,
+    Unchanged,
+    Skipped,
 }
 
 /// Scrapes every source, extracts upcoming matchups and saves them. One
@@ -76,10 +94,11 @@ pub async fn scrape_all(db: &DbConn) -> Result<ScrapeSummary, sea_orm::DbErr> {
         summary.fights_seen += reports.len();
 
         for report in reports.iter() {
-            if save(db, source, report, today).await? {
-                summary.fights_created += 1;
-            } else {
-                summary.fights_updated += 1;
+            match save(db, source, report, today).await? {
+                Saved::Created => summary.fights_created += 1,
+                Saved::Updated => summary.fights_updated += 1,
+                Saved::Unchanged => summary.fights_unchanged += 1,
+                Saved::Skipped => summary.fights_skipped += 1,
             }
         }
     }
@@ -182,6 +201,7 @@ async fn news_reports(
                 matchup,
                 url: link.url.clone(),
                 headline: link.headline.clone(),
+                published: details.published.map(|p| p.date_naive()),
             });
         }
     }
@@ -210,6 +230,7 @@ async fn sherdog_reports(
             reports.push(Report {
                 headline: format!("{}: {fighter_a} vs. {fighter_b}", event.name),
                 url: event.url.clone(),
+                published: None,
                 matchup: Matchup {
                     fighter_a,
                     fighter_b,
@@ -260,18 +281,22 @@ async fn fetch_html(client: &reqwest::Client, url: &str) -> Result<String, Strin
         .map_err(|e| e.to_string())
 }
 
-/// Saves a report, returning `true` if it's a new fight.
+/// Saves a report.
 ///
 /// A pair of fighters has at most one upcoming fight, so a later report about
 /// the same pair updates that row: rumors get promoted to confirmed (never the
 /// reverse) and a missing event name or date gets filled in. A published fight
 /// card is authoritative and overwrites the event and date.
+///
+/// News published before (or just after) the pair's most recent fight, or
+/// undated, is about that fight, so it's skipped rather than saved as a new
+/// one. Outlets keep old stories listed for days after an event.
 async fn save(
     db: &DbConn,
     source: &Source,
     report: &Report,
     today: NaiveDate,
-) -> Result<bool, sea_orm::DbErr> {
+) -> Result<Saved, sea_orm::DbErr> {
     let matchup = &report.matchup;
     let (a, b, existing) = match booked_pair(db, matchup, today).await? {
         Some(fight) => (fight.fighter_a_id, fight.fighter_b_id, Some(fight)),
@@ -281,6 +306,17 @@ async fn save(
             (a.min(b), a.max(b), upcoming_fight(db, a, b, today).await?)
         }
     };
+
+    if existing.is_none() && !matchup.from_fight_card {
+        if let Some(fought_on) = last_fight_date(db, a, b, today).await? {
+            if report
+                .published
+                .is_none_or(|published| published <= fought_on + POST_FIGHT_COVERAGE)
+            {
+                return Ok(Saved::Skipped);
+            }
+        }
+    }
 
     let now = Utc::now();
     let headline = normalize(&report.headline);
@@ -300,7 +336,8 @@ async fn save(
         }
         .insert(db)
         .await?;
-        return Ok(true);
+        tracing::debug!(source = source.name, url = report.url, published = ?report.published, "new fight");
+        return Ok(Saved::Created);
     };
 
     let promoted =
@@ -312,7 +349,7 @@ async fn save(
         && (existing.event_date.is_none()
             || (matchup.from_fight_card && existing.event_date != matchup.event_date));
     if !(promoted || new_event || new_date) {
-        return Ok(false);
+        return Ok(Saved::Unchanged);
     }
 
     let mut update: fight::ActiveModel = existing.into();
@@ -330,7 +367,25 @@ async fn save(
     update.headline = Set(headline);
     update.updated_at = Set(now);
     update.update(db).await?;
-    Ok(false)
+    Ok(Saved::Updated)
+}
+
+/// When the two fighters most recently fought, if that's before `today`.
+async fn last_fight_date(
+    db: &DbConn,
+    a: i32,
+    b: i32,
+    today: NaiveDate,
+) -> Result<Option<NaiveDate>, sea_orm::DbErr> {
+    let (a, b) = (a.min(b), a.max(b));
+    let fight = fight::Entity::find()
+        .filter(fight::Column::FighterAId.eq(a))
+        .filter(fight::Column::FighterBId.eq(b))
+        .filter(fight::Column::EventDate.lt(today))
+        .order_by_desc(fight::Column::EventDate)
+        .one(db)
+        .await?;
+    Ok(fight.and_then(|f| f.event_date))
 }
 
 /// The upcoming (or undated) fight between two fighters, if any.
@@ -460,6 +515,7 @@ mod tests {
             },
             url: String::new(),
             headline: String::new(),
+            published: None,
         }
     }
 

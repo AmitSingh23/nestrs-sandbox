@@ -59,7 +59,11 @@ pub fn upcoming_events(html: &str, page_url: &Url, today: NaiveDate) -> Vec<Even
         .collect()
 }
 
-/// The bouts on an event page, as (fighter, fighter) pairs.
+/// Sherdog's stand-in when an opponent hasn't been named.
+const UNNAMED_FIGHTER: &str = "Unknown Fighter";
+
+/// The bouts on an event page, as (fighter, fighter) pairs. Bouts still
+/// waiting on an opponent are left out.
 pub fn bouts(html: &str) -> Vec<(String, String)> {
     let doc = Html::parse_document(html);
     doc.select(&BOUT)
@@ -68,7 +72,8 @@ pub fn bouts(html: &str) -> Vec<(String, String)> {
             let (a, b) = normalize(name)
                 .split_once(" vs ")
                 .map(|(a, b)| (a.to_string(), b.to_string()))?;
-            (!a.is_empty() && !b.is_empty()).then_some((a, b))
+            let named = |n: &str| !n.is_empty() && n != UNNAMED_FIGHTER;
+            (named(&a) && named(&b)).then_some((a, b))
         })
         .collect()
 }
@@ -134,6 +139,9 @@ mod tests {
           </tr>
           <tr itemprop="subEvent" itemscope itemtype="http://schema.org/Event">
             <td><meta itemprop="name" content="Lone&#039;er Kavanagh vs Ramazonbek Temirov"></td>
+          </tr>
+          <tr itemprop="subEvent" itemscope itemtype="http://schema.org/Event">
+            <td><meta itemprop="name" content="Randy Brown vs Unknown Fighter"></td>
           </tr>
         </table>"#;
 

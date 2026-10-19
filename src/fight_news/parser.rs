@@ -55,7 +55,7 @@ static WEIGH_IN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\bweigh[- ]
 /// Headlines about fights that already happened.
 static RESULT_WORDS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)\b(results?|def\.|defeats?|beats?|knocks? out|knockout of|submits|stops|edges|outpoints|highlights|scorecards?|post-?fight|recap|reacts?|wins|won|retains|loses|lost|bonuses|salaries|payouts)\b",
+        r"(?i)\b(results?|def\.|defeats?|beats?|knocks? out|knockout of|submits|stops|edges|outpoints|highlights|scorecards?|post-?fight|recap|reacts?|wins|won|retains|loses|lost|bonuses|salaries|payouts|live blog|live updates|play-by-play)\b",
     )
     .unwrap()
 });
@@ -751,11 +751,12 @@ mod tests {
     fn real_results_and_other_promotions_are_skipped() {
         for title in [
             "LIVE! PFL Chicago Results: Carmouche vs. Bishop 2",
+            "UFC Edmonton live blog: Joaquin Buckley vs. Mike Malott",
             "Ryan Garcia vs. Teofimo Lopez title fight targeted for early 2027",
             "UFC Edmonton early weigh ins video, live results &#124; Buckley vs. Malott",
         ] {
             let found = extract_matchups(&item(title, None), today());
-            if title.starts_with("UFC Edmonton") {
+            if title.contains("weigh ins") {
                 // Weigh-ins, so it's kept.
                 assert_eq!(found.len(), 1, "{title}");
             } else {
